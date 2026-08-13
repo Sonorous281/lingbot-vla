@@ -1,21 +1,72 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lingbotvla"
-dynamic = ["dependencies", "optional-dependencies"]
-version = "0.0.1"
+name = "rlinf-lingbotvla"
+version = "0.1.0"
+description = "Pinned LingBot-VLA inference runtime maintained by RLinf"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = {file = "LICENSE"}
 authors = [
-  { name="Robbyant Team"},
+    {name = "Robbyant Team"},
+    {name = "RLinf Contributors"},
 ]
-description = "LingBot-VLA: A Pragmatic VLA Foundation Model"
-requires-python = ">=3.8"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "av>=14.2.0",
+    "blobfile>=3.0.0",
+    "datasets==3.6.0",
+    "diffusers==0.30.3",
+    "draccus==0.10.0",
+    "einops>=0.8.0",
+    "gymnasium==0.29.1",
+    "huggingface-hub[cli]>=0.27.1",
+    "matplotlib",
+    "msgpack",
+    "numpy==1.26.4",
+    "numpydantic",
+    "omegaconf>=2.3.0",
+    "packaging>=24.2",
+    "pillow>=10",
+    "pyyaml",
+    "safetensors",
+    "tensorboard==2.16.2",
+    "termcolor>=2.4.0",
+    "torch==2.8.0",
+    "torchaudio==2.8.0",
+    "torchcodec==0.6.0",
+    "torchdata>=0.8.0,<1.0",
+    "torchvision==0.23.0",
+    "tqdm",
+    "transformers==4.51.3",
+    "websockets",
+]
+
+[project.urls]
+Homepage = "https://github.com/RLinf/lingbot-vla"
+Repository = "https://github.com/RLinf/lingbot-vla"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = [".", "vendor/lerobot"]
+include = ["deploy*", "lingbotvla*", "lerobot*"]
+exclude = ["scripts*", "tasks*", "tests*"]
+
+[tool.setuptools.package-data]
+lerobot = ["LICENSE"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 line-length = 119
 indent-width = 4
 

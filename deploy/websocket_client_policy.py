@@ -49,8 +49,11 @@ class WebsocketClientPolicy:
         return unpackb(response)
 
     @override
-    def reset(self, robo_name: str) -> None:
-        self.infer(dict(reset=True, robo_name=robo_name))
+    def reset(self, robo_name: str | None = None) -> None:
+        request = dict(reset=True)
+        if robo_name is not None:
+            request["robo_name"] = robo_name
+        self.infer(request)
 
 if __name__ == "__main__":
     policy_on_device = WebsocketClientPolicy(port=8000)
@@ -85,4 +88,3 @@ if __name__ == "__main__":
     }
 
     policy_on_device.infer(observation)
-    from IPython import embed;embed()

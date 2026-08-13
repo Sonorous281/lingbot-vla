@@ -129,6 +129,7 @@ class LingbotVLAServer:
         use_bf16=True,
         use_fp32=False,
         robot_norm_path: str = None,
+        robot_config: str | Path | None = None,
         num_denoising_step=10,
         use_compile=False
     ) -> None:
@@ -140,7 +141,10 @@ class LingbotVLAServer:
         self.num_denoising_step = num_denoising_step
 
         self.robot_norm_path = robot_norm_path
-        
+        self.robot_config = (
+            Path(robot_config).expanduser().resolve() if robot_config else None
+        )
+
         self.vla = self.load_vla(path_to_pi_model)
         self.vla = self.vla.eval()
         if use_bf16:
@@ -217,15 +221,25 @@ class LingbotVLAServer:
 
         return policy
 
-    def reset(self, robo_name) -> None:
+    def reset(self, robo_name: str | None = None) -> None:
+        """Reset inference history and rebuild the configured feature transform.
+
+        ``robot_config`` should normally be supplied to the constructor. The
+        ``robo_name`` fallback keeps the upstream command-line API compatible.
+        """
 
         self.global_step = 0
         self.last_action_chunk = None
+        self.vla.reset()
 
         image_processor = self.processor.image_processor
-        robot_config = f'configs/robot_configs/{robo_name}.yaml'
+        robot_config = self.robot_config
+        if robot_config is None:
+            if not robo_name:
+                raise ValueError("robot_config is required before resetting LingBot-VLA")
+            robot_config = Path("configs/robot_configs") / f"{robo_name}.yaml"
 
-        feature_transform = FeatureTransform(robot_config, self.data_config, \
+        feature_transform = FeatureTransform(str(robot_config), self.data_config, \
                     self.language_tokenizer, image_processor, \
                     chunk_size=self.config.chunk_size,
                     norm_stats_path=self.robot_norm_path)
@@ -253,7 +267,7 @@ class LingbotVLAServer:
         # IMPORTANT: Let's say crop scale == 0.9. To get the new height and width (post-crop), multiply
         #            the original height and width by sqrt(0.9) -- not 0.9!
         if 'reset' in observation and observation['reset']:
-            self.reset(robo_name=observation['robo_name'])
+            self.reset(robo_name=observation.get('robo_name'))
             return dict(action = None)
         self.resize_image(observation)
         for k, v in observation.items():
