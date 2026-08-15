@@ -3,10 +3,13 @@ import http
 import logging
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
-from .msgpack_numpy import Packer, unpackb
 import websockets.asyncio.server as _server
 import websockets.frames
+
+from .msgpack_numpy import Packer, unpackb
+
 
 logger = logging.getLogger(__name__)
 
@@ -28,21 +31,38 @@ class WebsocketPolicyServer:
         self._host = host
         self._port = port
         self._metadata = metadata or {}
+        self._inference_lock = asyncio.Lock()
+        self._inference_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="lingbot-inference",
+        )
         logging.getLogger("websockets.server").setLevel(logging.INFO)
 
     def serve_forever(self) -> None:
         asyncio.run(self.run())
 
     async def run(self):
-        async with _server.serve(
-            self._handler,
-            self._host,
-            self._port,
-            compression=None,
-            max_size=None,
-            process_request=_health_check,
-        ) as server:
-            await server.serve_forever()
+        try:
+            async with _server.serve(
+                self._handler,
+                self._host,
+                self._port,
+                compression=None,
+                max_size=None,
+                process_request=_health_check,
+            ) as server:
+                await server.serve_forever()
+        finally:
+            self._inference_executor.shutdown(wait=True)
+
+    async def _infer(self, observation):
+        async with self._inference_lock:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                self._inference_executor,
+                self._policy.infer,
+                observation,
+            )
 
     async def _handler(self, websocket: _server.ServerConnection):
         logger.info(f"Connection from {websocket.remote_address} opened")
@@ -57,7 +77,7 @@ class WebsocketPolicyServer:
                 obs = unpackb(await websocket.recv())
 
                 infer_time = time.monotonic()
-                action = self._policy.infer(obs)
+                action = await self._infer(obs)
                 infer_time = time.monotonic() - infer_time
 
                 action["server_timing"] = {

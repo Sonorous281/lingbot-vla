@@ -151,9 +151,11 @@ class LingbotVLAServer:
             self.vla = self.vla.to(torch.bfloat16)
         elif use_fp32:
             self.vla.model.float()
-        self.global_step = 0
-        self.last_action_chunk = None
         self.use_bf16 = use_bf16
+        if self.robot_config is not None:
+            self.vla.feature_transform = self._build_feature_transform(
+                self.robot_config
+            )
 
     def load_vla(self, path_to_pi_model) -> LingbotVlaPolicy:
         # load model
@@ -221,30 +223,26 @@ class LingbotVLAServer:
 
         return policy
 
+    def _build_feature_transform(self, robot_config: Path) -> FeatureTransform:
+        return FeatureTransform(
+            str(robot_config),
+            self.data_config,
+            self.language_tokenizer,
+            self.processor.image_processor,
+            chunk_size=self.config.chunk_size,
+            norm_stats_path=self.robot_norm_path,
+        )
+
     def reset(self, robo_name: str | None = None) -> None:
-        """Reset inference history and rebuild the configured feature transform.
-
-        ``robot_config`` should normally be supplied to the constructor. The
-        ``robo_name`` fallback keeps the upstream command-line API compatible.
-        """
-
-        self.global_step = 0
-        self.last_action_chunk = None
-        self.vla.reset()
-
-        image_processor = self.processor.image_processor
-        robot_config = self.robot_config
-        if robot_config is None:
-            if not robo_name:
-                raise ValueError("robot_config is required before resetting LingBot-VLA")
-            robot_config = Path("configs/robot_configs") / f"{robo_name}.yaml"
-
-        feature_transform = FeatureTransform(str(robot_config), self.data_config, \
-                    self.language_tokenizer, image_processor, \
-                    chunk_size=self.config.chunk_size,
-                    norm_stats_path=self.robot_norm_path)
-        # Load data processors
-        self.vla.feature_transform = feature_transform
+        """Initialize the legacy robot-specific transform when needed."""
+        if self.robot_config is not None:
+            return
+        if self.vla.feature_transform is not None:
+            return
+        if not robo_name:
+            raise ValueError("robot_config is required before resetting LingBot-VLA")
+        robot_config = Path("configs/robot_configs") / f"{robo_name}.yaml"
+        self.vla.feature_transform = self._build_feature_transform(robot_config)
 
     def resize_image(self, observation):
         image_features  = self.vla.feature_transform.org_features['images']
@@ -291,7 +289,6 @@ class LingbotVLAServer:
                 assert self.use_length <= output[output_key].shape[0]
                 action_length = self.use_length if self.use_length > 0 else output[output_key].shape[0]
                 action_chunk[output_key] = output[output_key][ :action_length,:].float().cpu().numpy()
-        self.global_step+=1
         return action_chunk
 
 def main():
