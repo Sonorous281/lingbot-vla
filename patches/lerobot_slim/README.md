@@ -44,6 +44,16 @@ python scripts/apply_lerobot_slim.py
 downgrade the RoboTwin CUDA stack (`torch 2.8.0`). The slim files make the
 hardware deps unnecessary, so `--no-deps` is safe for inference.
 
-The applier is idempotent (sha256-equality probe) and version-guarded
-(`lerobot.__version__ == "0.4.2"`); it reports `already_patched` on re-run and
-`not_found` on version drift instead of silently no-op.
+The applier is **fail-closed** and idempotent. For each target it takes a
+three-way decision on the file's sha256 against two pinned hashes — the
+official `0.4.2` wheel hash and the patched (slim) hash:
+
+| target sha256 matches | action | status |
+|-----------------------|--------|--------|
+| patched hash | leave untouched (idempotent) | `already_patched` |
+| official `0.4.2` hash | write the slim copy | `patched` |
+| neither (or version ≠ 0.4.2) | **do not overwrite**; exit non-zero | `unexpected_hash` / `version_mismatch` |
+
+The shipped slim source itself must also hash to the pinned patched value, else
+the run fails as `patch_source_drift` (an accidental edit to `patches/lerobot_slim/`
+fails loudly instead of installing a different patch).

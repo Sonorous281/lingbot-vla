@@ -1,4 +1,4 @@
-"""Guarded, idempotent whole-file slimming for the pinned ``lerobot==0.4.2``.
+"""Fail-closed, idempotent whole-file slimming for the pinned ``lerobot==0.4.2``.
 
 The official ``lerobot==0.4.2`` wheel eagerly imports a chain that pulls in
 hardware/serial modules (``lerobot.policies.__init__`` -> ``groot`` ->
@@ -20,6 +20,21 @@ so the runtime can depend on the official wheel instead of a vendored copy. It
 mirrors the design of ``rlinf_robotwin.patches`` (``rlinf-robotwin-patch``):
 package located via ``importlib``, version checked, idempotent, reinstall-safe,
 and version-drift-detecting rather than silently no-op.
+
+Fail-closed contract
+--------------------
+The applier never silently overwrites an unrecognised file. For each target it
+takes a three-way decision keyed on the file's sha256:
+
+* matches the **patched** hash  -> ``already_patched`` (idempotent, no write)
+* matches the **official 0.4.2** hash -> write the slim copy -> ``patched``
+* anything else -> ``unexpected_hash`` (NO write; aborts with a non-zero exit)
+
+The patched hash is also asserted against the shipped slim source file itself
+(``patch_source_drift`` if it differs), so an accidental edit to
+``patches/lerobot_slim/`` fails loudly instead of installing a different patch.
+A version guard short-circuits the whole run to ``version_mismatch`` (no writes)
+when ``lerobot.__version__ != "0.4.2"``.
 
 Run via the ``apply-lerobot-slim`` console script (or ``python -m``) after
 installing ``lerobot==0.4.2`` (use ``--no-deps``; lerobot 0.4.2's own deps
@@ -47,6 +62,43 @@ _SLIM_FILES: tuple[str, ...] = (
 
 _EXPECTED_LEROBOT_VERSION = "0.4.2"
 
+# sha256 of each file as it ships in the official ``lerobot==0.4.2`` wheel
+# (``lerobot-0.4.2-py3-none-any.whl``, wheel sha256
+# ``af4e5c709522c8022703e10431c14ae65b2e967e7ab608f51a07c03c38cefe04``).
+# A target matching this is the un-slimmed official source -> safe to patch.
+_OFFICIAL_SHA: dict[str, str] = {
+    "policies/__init__.py": (
+        "1c7cb025cdb5e524da8b4fa2b633d502e2180b50d7ce535d8001853e6464329e"
+    ),
+    "policies/pretrained.py": (
+        "4d5a42bd475c7beca2ec899b7fcf7a0d890edc4234d143e4397c9999edafc39e"
+    ),
+    "processor/__init__.py": (
+        "10c1151144d60b32d7eff191931a7dc1f0057d00335131f13b664861fc3562bc"
+    ),
+}
+
+# sha256 of each file *after* slimming (i.e. of the shipped slim copy in
+# ``patches/lerobot_slim/``). A target matching this is already slimmed ->
+# idempotent no-op. The slim source file itself must also hash to this value
+# (else the patch source has drifted -> ``patch_source_drift``).
+_PATCHED_SHA: dict[str, str] = {
+    "policies/__init__.py": (
+        "70ecece820102b15111588049ac4879abecd4575436ed4f42980c21193494cf4"
+    ),
+    "policies/pretrained.py": (
+        "f3270d5b5b111e2c47c7462d3e26240cd8c285053d48702ea35f9f84cd414639"
+    ),
+    "processor/__init__.py": (
+        "c9f75e5ba22d2a67e4965ae94fe0a94591f55f2936f43db669632295bc2e2729"
+    ),
+}
+
+# Statuses that indicate the run failed and must not be treated as success.
+_FAILURE_STATUSES = frozenset(
+    {"missing_package", "version_mismatch", "not_found", "unexpected_hash", "patch_source_drift"}
+)
+
 
 @dataclass
 class SlimReport:
@@ -54,7 +106,7 @@ class SlimReport:
 
     relpath: str
     target: str
-    status: str  # "patched" | "already_patched" | "not_found" | "missing_package"
+    status: str  # see _FAILURE_STATUSES + {"patched", "already_patched"}
     detail: str = ""
 
     def as_line(self) -> str:
@@ -96,7 +148,13 @@ def _resolve_lerobot_dir() -> Path | None:
 
 
 def apply_lerobot_slim() -> list[SlimReport]:
-    """Apply the three slim files onto the installed ``lerobot`` package."""
+    """Apply the three slim files onto the installed ``lerobot`` package.
+
+    Fail-closed: an unrecognised target hash or a version mismatch is reported
+    and NO file is overwritten. Only a target whose hash matches the official
+    ``0.4.2`` source is patched; a target already matching the patched hash is
+    left untouched (idempotent).
+    """
 
     reports: list[SlimReport] = []
     lerobot_dir = _resolve_lerobot_dir()
@@ -110,19 +168,26 @@ def apply_lerobot_slim() -> list[SlimReport]:
             )
         ]
 
-    # Version guard: warn loudly on drift, but still attempt (the slim files may
-    # apply cleanly to a nearby point release; if they don't, the not_found
-    # status below surfaces it).
+    # Version guard: fail-closed. Slimming is only defined for the exact 0.4.2
+    # source these hashes were computed from; any other version is left as-is.
     try:
         version = getattr(importlib.import_module("lerobot"), "__version__", "?")
     except Exception as exc:  # noqa: BLE001
         version = f"import-error:{exc}"
     if version != _EXPECTED_LEROBOT_VERSION:
-        print(
-            f"[lerobot-slim] WARNING: lerobot __version__={version!r}, expected "
-            f"{_EXPECTED_LEROBOT_VERSION!r}. Slimming targets 0.4.2 exactly.",
-            file=sys.stderr,
-        )
+        for relpath in _SLIM_FILES:
+            reports.append(
+                SlimReport(
+                    relpath=relpath,
+                    target=str(lerobot_dir / relpath),
+                    status="version_mismatch",
+                    detail=(
+                        f"lerobot __version__={version!r}, expected "
+                        f"{_EXPECTED_LEROBOT_VERSION!r}; no files written"
+                    ),
+                )
+            )
+        return reports
 
     slim_root = _slim_root()
     for relpath in _SLIM_FILES:
@@ -139,6 +204,22 @@ def apply_lerobot_slim() -> list[SlimReport]:
             )
             continue
         slim_text = slim_src.read_text(encoding="utf-8")
+        # The shipped slim source must hash to the known patched hash; if it
+        # does not, the patch itself has drifted -> fail rather than install an
+        # unreviewed patch.
+        if _sha256(slim_text) != _PATCHED_SHA[relpath]:
+            reports.append(
+                SlimReport(
+                    relpath=relpath,
+                    target=str(slim_src),
+                    status="patch_source_drift",
+                    detail=(
+                        "slim source sha256 does not match the pinned patched "
+                        f"hash {_PATCHED_SHA[relpath]}; inspect patches/lerobot_slim"
+                    ),
+                )
+            )
+            continue
         if not target.is_file():
             reports.append(
                 SlimReport(
@@ -150,16 +231,32 @@ def apply_lerobot_slim() -> list[SlimReport]:
             )
             continue
         current = target.read_text(encoding="utf-8")
-        if _sha256(current) == _sha256(slim_text):
+        current_sha = _sha256(current)
+        if current_sha == _PATCHED_SHA[relpath]:
             reports.append(
                 SlimReport(
                     relpath=relpath, target=str(target), status="already_patched"
                 )
             )
             continue
-        target.write_text(slim_text, encoding="utf-8")
+        if current_sha == _OFFICIAL_SHA[relpath]:
+            target.write_text(slim_text, encoding="utf-8")
+            reports.append(
+                SlimReport(relpath=relpath, target=str(target), status="patched")
+            )
+            continue
+        # Unrecognised content: do NOT overwrite. Fail-closed.
         reports.append(
-            SlimReport(relpath=relpath, target=str(target), status="patched")
+            SlimReport(
+                relpath=relpath,
+                target=str(target),
+                status="unexpected_hash",
+                detail=(
+                    f"target sha256={current_sha} matches neither official "
+                    f"({_OFFICIAL_SHA[relpath]}) nor patched "
+                    f"({_PATCHED_SHA[relpath]}); file left unmodified"
+                ),
+            )
         )
     return reports
 
@@ -171,12 +268,13 @@ def main() -> int:
     hard_failures = 0
     for report in reports:
         print(report.as_line())
-        if report.status in {"not_found", "missing_package"}:
+        if report.status in _FAILURE_STATUSES:
             hard_failures += 1
     if hard_failures:
         print(
-            f"\n{hard_failures} slim target(s) missing. This usually means the "
-            "pinned lerobot==0.4.2 changed. Inspect the source and update "
+            f"\n{hard_failures} slim target(s) failed (fail-closed: no unrecognised "
+            "file was overwritten). This usually means the pinned lerobot==0.4.2 "
+            "changed or patches/lerobot_slim drifted. Inspect the source and update "
             "patches/lerobot_slim.",
             file=sys.stderr,
         )
