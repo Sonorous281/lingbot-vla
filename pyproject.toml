@@ -20,6 +20,16 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3.11",
 ]
+# NOTE: ``lerobot==0.4.2`` is a runtime requirement but is intentionally NOT
+# listed here. Its own pins (``torch>=2.2.1,<2.8.0``, ``datasets>=4.0,<4.2``,
+# ``gymnasium>=1.1.1``) conflict with the RoboTwin CUDA stack pinned below
+# (``torch==2.8.0``, ``datasets==3.6.0``, ``gymnasium==0.29.1``), so a resolver
+# honouring lerobot's deps would downgrade the runtime. It is instead installed
+# with ``--no-deps`` by ``install.sh`` (or the RLinf runtime installer), after
+# which ``scripts/apply_lerobot_slim.py`` reapplies the three load-bearing
+# import-slimming overrides shipped in ``patches/lerobot_slim/``. The slim files
+# remove lerobot's hardware-dep import chain, so ``--no-deps`` is safe for
+# inference. See ``patches/lerobot_slim/README.md``.
 dependencies = [
     "av>=14.2.0",
     "blobfile>=3.0.0",
@@ -58,12 +68,9 @@ Repository = "https://github.com/RLinf/lingbot-vla"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-where = [".", "vendor/lerobot"]
-include = ["deploy*", "lingbotvla*", "lerobot*"]
+where = ["."]
+include = ["deploy*", "lingbotvla*"]
 exclude = ["scripts*", "tasks*", "tests*"]
-
-[tool.setuptools.package-data]
-lerobot = ["LICENSE"]
 
 [tool.ruff]
 target-version = "py311"
